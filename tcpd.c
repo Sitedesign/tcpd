@@ -16,8 +16,11 @@ unsigned int numchildren = 0;
 unsigned int autokill = 0;
 int flagkillopts = 1;
 int flagdelay = 1;
+int cacheprogram = 0;
 unsigned int localport, remoteport;
+long cachesize = 0;
 
+char* cache;
 char localip[4];
 char remoteip[4];
 
@@ -63,7 +66,7 @@ void eprint(int n, const char *s, ...) {
  const char *types[3] = {"fatal: ", "warn: ", "status: "};
  va_list argptr;
  va_start(argptr, s);
- fprintf(stderr, types[n]);
+ fprintf(stderr, "%s", types[n]);
  vfprintf(stderr, s, argptr);
  fprintf(stderr, "\n");
  va_end(argptr);
@@ -90,12 +93,14 @@ void sigchld() {
 void sigterm() {
  fprintf(stderr, "sig_term caught\n");
  if (autokill != 0) ptable_destroy(pt);
+ if (cacheprogram) free(cache);
  exit(0);
 }
 
 void sigint() {
  fprintf(stderr, "sig_int caught\n");
  if (autokill != 0) ptable_destroy(pt);
+ if (cacheprogram) free(cache);
  exit(0);
 }
 
@@ -108,7 +113,7 @@ int main(int argc,char **argv)
 
  opterr = 0;
 
- while ((c = getopt(argc, argv, "dDoO:k:c:")) != -1)
+ while ((c = getopt(argc, argv, "dDoOC:k:c:")) != -1)
   switch (c) {
 	case 'c':
 	 limit = atoi(optarg);
@@ -118,6 +123,7 @@ int main(int argc,char **argv)
 	case 'D': flagdelay = 0; break;
 	case 'O': flagkillopts = 1; break;
 	case 'o': flagkillopts = 0; break;
+	case 'C': cacheprogram = 1; break;
 	case 'k':
 	 autokill = atoi(optarg);
 	 if (autokill == 0) usage();
@@ -162,6 +168,47 @@ int main(int argc,char **argv)
  close(1);
  printstatus();
 
+ if (cacheprogram) {
+
+   FILE *fp1;
+   int fp2;
+   char path[1024];
+   ssize_t n;
+
+   fp1 = popen(*argv, "r");
+   if (fp1 == NULL) {
+     fprintf(stderr, "Failed to run command\n");
+     exit(1);
+   }
+
+   fp2 = open("/var/tmp/tcpd.cache", O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+   if (fp2 == -1) {
+     fprintf(stderr, "Can't open cache file\n");
+     exit(1);
+   }
+
+   while ((n = fgets(path, sizeof(path)-1, fp1)) != NULL) {
+     if (write(fp2, path, n) == n) {
+       fprintf(stderr, "Error occured while creating cache\n");
+       exit(1);
+     }
+   }
+
+   /* close */
+   pclose(fp1);
+   close(fp2);
+
+   // read cache file into memory
+   FILE *f = fopen("/var/tmp/tcpd.cache", "rb");
+   fseek(f, 0, SEEK_END);
+   cachesize = ftell(f);
+   fseek(f, 0, SEEK_SET);  //same as rewind(f);
+   cache = malloc(cachesize + 1);
+   n = fread(cache, cachesize, 1, f);
+   fclose(f);
+   cache[cachesize] = 0;
+ }
+
  for (;;) {
    while (numchildren >= limit) {
     if (autokill != 0) ptable_autokill(pt, limit, autokill);
@@ -190,11 +237,18 @@ int main(int argc,char **argv)
 	 sig_uncatch(sig_term);
 	 sig_uncatch(sig_int);
 	 sig_uncatch(sig_pipe);
-	 if(execve(*argv,argv,NULL) == 0) {
+
+	 if (cacheprogram) {
+	   printf("%s", cache);
 	   close(t);
 	   exit(0);
 	 } else {
-	   die(111, "unable to run argv");
+	   if(execve(*argv,argv,NULL) == 0) {
+	     close(t);
+	     exit(0);
+	   } else {
+	     die(111, "unable to run argv");
+	   }
 	 }
 	 break;
 	case -1:
