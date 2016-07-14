@@ -1,0 +1,8 @@
+#!/bin/bash
+
+DAEMON=../tcpd64
+IP=127.0.0.1
+PORT=8090
+PROGRAM=program.sh
+
+$DAEMON -D -c 40 -k 300 $IP $PORT $PROGRAM
